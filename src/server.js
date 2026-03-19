@@ -19,6 +19,11 @@ const client = new line.messagingApi.MessagingApiClient({
   channelAccessToken: config.channelAccessToken
 });
 
+// เพิ่มต่อจาก client เดิม
+const blobClient = new line.messagingApi.MessagingApiBlobClient({
+  channelAccessToken: config.channelAccessToken
+});
+
 // --- 2. ฟังก์ชัน AI (เหมือนเดิม) ---
 async function analyzeOrderWithAI(userText) {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -48,6 +53,7 @@ async function analyzeOrderWithAI(userText) {
     });
 
     const data = await response.json();
+   
     const aiText = data.candidates[0].content.parts[0].text;
     const cleanJson = aiText.replace(/```json|```/g, "").trim();
     return JSON.parse(cleanJson);
@@ -61,15 +67,24 @@ async function analyzeSlipWithAI(messageId) {
   const apiKey = process.env.GEMINI_API_KEY;
   
   try {
-    // 1. ดึงไฟล์รูปภาพจาก LINE Server
-    const responseStream = await client.getMessageContent(messageId);
+    const responseStream = await blobClient.getMessageContent(messageId);
     const chunks = [];
     for await (const chunk of responseStream) { chunks.push(chunk); }
     const buffer = Buffer.concat(chunks);
+    console.log("📦 Image buffer size:", buffer.length, "bytes");
     const base64Image = buffer.toString('base64');
 
-    // 2. ส่งรูปไปให้ Gemini วิเคราะห์ (OCR)
-    const runUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+    // ดึง model ที่ available จริงๆ (เหมือน analyzeOrderWithAI)
+    const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+    const listData = await listRes.json();
+    const availableModel = listData.models?.find(m => 
+      m.supportedGenerationMethods.includes("generateContent")
+    )?.name;
+
+    console.log("🤖 Using model:", availableModel);
+    if (!availableModel) return null;
+
+    const runUrl = `https://generativelanguage.googleapis.com/v1beta/${availableModel}:generateContent?key=${apiKey}`;
     
     const response = await fetch(runUrl, {
       method: 'POST',
@@ -77,14 +92,15 @@ async function analyzeSlipWithAI(messageId) {
       body: JSON.stringify({
         contents: [{
           parts: [
-            { text: "นี่คือสลิปโอนเงินใช่ไหม? ถ้าใช่ ช่วยสรุป: ธนาคาร, วันที่เวลา, จำนวนเงิน (บาท), และชื่อผู้รับโอน มาเป็น JSON เท่านั้น ถ้าไม่ใช่สลิปตอบ null" },
-            { inline_data: { mime_type: "image/png", data: base64Image } }
+            { text: 'นี่คือสลิปโอนเงินใช่ไหม? ถ้าใช่ ตอบ JSON เท่านั้น: {"bank":"","date":"","amount":"","recipient":""} ถ้าไม่ใช่สลิปตอบ null' },
+            { inline_data: { mime_type: "image/jpeg", data: base64Image } }
           ]
         }]
       })
     });
 
     const data = await response.json();
+    console.log("🔍 Gemini OCR raw:", JSON.stringify(data, null, 2));
     const aiText = data.candidates[0].content.parts[0].text;
     const cleanJson = aiText.replace(/```json|```/g, "").trim();
     return JSON.parse(cleanJson);
@@ -94,6 +110,7 @@ async function analyzeSlipWithAI(messageId) {
     return null;
   }
 }
+
 
 // --- 3. หน้าตาบิล (Flex Message) ---
 function createFlexBill(order) {
@@ -161,25 +178,61 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
 });
 
 async function handleEvent(event) {
-  if (event.type !== 'message' || event.message.type !== 'text') return null;
-  console.log(`📩 ข้อความเข้า: ${event.message.text}`);
+  if (event.type !== 'message') return null;
 
-  const orderData = await analyzeOrderWithAI(event.message.text);
+  // --- กรณีส่งรูปภาพ (สลิปโอนเงิน) ---
+  if (event.message.type === 'image') {
+    console.log(`🖼️ รูปภาพเข้า: ${event.message.id}`);
+    
+    const slipData = await analyzeSlipWithAI(event.message.id);
 
-  if (orderData) {
-    return client.replyMessage({
-      replyToken: event.replyToken,
-      messages: [createFlexBill(orderData)]
-    });
-  } else {
-    return client.replyMessage({
-      replyToken: event.replyToken,
-      messages: [{ type: 'text', text: 'รับทราบครับ มีอะไรให้ MaiPaws ช่วยเพิ่มเติมไหมครับ?' }]
-    });
+    if (slipData) {
+      const replyText = 
+        `✅ ตรวจพบสลิปโอนเงิน!\n` +
+        `🏦 ธนาคาร: ${slipData.bank || '-'}\n` +
+        `📅 วันที่: ${slipData.date || '-'}\n` +
+        `💰 จำนวน: ฿${slipData.amount || '-'}\n` +
+        `👤 ผู้รับ: ${slipData.recipient || '-'}`;
+
+      return client.replyMessage({
+        replyToken: event.replyToken,
+        messages: [{ type: 'text', text: replyText }]
+      });
+    } else {
+      return client.replyMessage({
+        replyToken: event.replyToken,
+        messages: [{ type: 'text', text: '❌ ไม่สามารถอ่านสลิปได้ กรุณาส่งรูปที่ชัดขึ้นครับ' }]
+      });
+    }
   }
+
+  // --- กรณีส่งข้อความ (สั่งซื้อ) ---
+  if (event.message.type === 'text') {
+    console.log(`📩 ข้อความเข้า: ${event.message.text}`);
+    const orderData = await analyzeOrderWithAI(event.message.text);
+
+    if (orderData) {
+      return client.replyMessage({
+        replyToken: event.replyToken,
+        messages: [createFlexBill(orderData)]
+      });
+    } else {
+      return client.replyMessage({
+        replyToken: event.replyToken,
+        messages: [{ type: 'text', text: 'รับทราบครับ มีอะไรให้ MaiPaws ช่วยเพิ่มเติมไหมครับ?' }]
+      });
+    }
+  }
+
+  return null;
 }
+
+
+
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Server พร้อมรันที่พอร์ต ${PORT}`);
 });
+
+
