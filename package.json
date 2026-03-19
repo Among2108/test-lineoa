@@ -1,0 +1,19 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "src/server.js",
+  "scripts": {
+    "dev": "node --watch --env-file=.env src/server.js",
+    "start": "node  --env-file=.env src/server.js",
+    "richmenu": "node --env-file=.env src/richmenu.js"
+  },
+  "author": "us",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@line/bot-sdk": "^10.6.0",
+    "express": "^5.2.1"
+  }
+}

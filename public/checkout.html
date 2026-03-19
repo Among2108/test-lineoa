@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ชำระเงิน - MaiPaws 🐾</title>
+    <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white w-full max-w-md rounded-2xl shadow-lg p-6">
+        <div class="text-center mb-6">
+            <h1 class="text-2xl font-bold text-green-600">ยืนยันการสั่งซื้อ 🛒</h1>
+            <p id="displayName" class="text-gray-500 mt-2">กำลังโหลดข้อมูลผู้ใช้...</p>
+        </div>
+
+        <div class="space-y-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-700">ที่อยู่จัดส่ง</label>
+                <textarea id="address" rows="4" 
+                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-green-500 focus:ring-green-500 border p-2"
+                    placeholder="กรุณากรอกชื่อ-นามสกุล และที่อยู่สำหรับจัดส่ง..."></textarea>
+            </div>
+
+            <button id="btnSubmit" 
+                class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 rounded-xl transition duration-200 shadow-md">
+                ยืนยันและส่งที่อยู่
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // เปลี่ยนตรงนี้เป็น LIFF ID ของคุณที่ได้จาก LINE Login Channel
+        const MY_LIFF_ID = "2009538837-NFjGJpwi" ;
+
+        async function main() {
+            try {
+                await liff.init({ liffId: MY_LIFF_ID });
+                if (!liff.isLoggedIn()) {
+                    liff.login();
+                } else {
+                    const profile = await liff.getProfile();
+                    document.getElementById('displayName').innerText = `คุณ ${profile.displayName} กรุณาระบุที่อยู่ครับ`;
+                }
+            } catch (err) {
+                console.error("LIFF Init Failed", err);
+            }
+        }
+
+        document.getElementById('btnSubmit').onclick = async () => {
+            const address = document.getElementById('address').value;
+            if (!address) return alert("กรุณากรอกที่อยู่ด้วยครับ");
+
+            try {
+                // ส่งข้อความกลับเข้าแชทบอทในนามของผู้ใช้
+                await liff.sendMessages([
+                    {
+                        type: 'text',
+                        text: `📍 ที่อยู่จัดส่งของฉัน:\n${address}`
+                    }
+                ]);
+                liff.closeWindow(); // ปิดหน้าต่าง LIFF ทันที
+            } catch (err) {
+                alert("เกิดข้อผิดพลาดในการส่งข้อมูล: " + err.message);
+            }
+        };
+
+        main();
+    </script>
+</body>
+</html>
